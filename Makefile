@@ -38,7 +38,7 @@ run:
 	go run ./main.go
 
 # Install CRDs into a cluster
-install: manifests kustomize
+install: kustomize
 	$(KUSTOMIZE) build config/crd | kubectl apply -f -
 
 # Uninstall CRDs from a cluster

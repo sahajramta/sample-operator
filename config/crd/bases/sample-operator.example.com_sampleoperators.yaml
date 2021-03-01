@@ -40,14 +40,11 @@ spec:
           description: SampleOperatorSpec defines the desired state of SampleOperator
           properties:
             serviceInstanceName:
-              type: string
-            size:
               description: Foo is an example field of SampleOperator. Edit SampleOperator_types.go
                 to remove/update
-              type: integer
+              type: string
           required:
           - serviceInstanceName
-          - size
           type: object
         status:
           description: SampleOperatorStatus defines the observed state of SampleOperator

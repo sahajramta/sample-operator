@@ -5,5 +5,4 @@ metadata:
   namespace: default
 spec:
   # Add fields here
-  size: 1
   serviceInstanceName: sample-service-instance-1

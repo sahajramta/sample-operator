@@ -56,19 +56,28 @@ func (r *SampleOperatorReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 	data[UsernameKey] = "sample-user"
 	data[PasswordKey] = "sample-pwd"
 
-	// Fetch SampleOperatorInstance
+	// Fetch SampleOperator Instance
 	instance := &sampleoperatorv1.SampleOperator{}
 	err := r.Client.Get(context.TODO(), req.NamespacedName, instance)
 	if err != nil {
 		// IsNotFound returns true if the specified error was created by NewNotFound.
+		// Request object not found, could have been deleted after reconcile request.
+		// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
+		// Return and don't requeue
 		if errors.IsNotFound(err) {
-			// dont reque the request
 			return ctrl.Result{}, nil
 		}
+		// Error reading the object - requeue the request.
 		return ctrl.Result{}, err
 	}
 
-	configMap := newConfigMapForCr(instance, data)
+	err = r.ensureLatestPod(instance, data)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	configMap := r.newConfigMapForCr(instance, data)
+	// Set Database instance as the owner and controller
 	if err := controllerutil.SetControllerReference(instance, configMap, r.Scheme); err != nil {
 		return reconcile.Result{}, err
 	}
@@ -97,13 +106,49 @@ func (r *SampleOperatorReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 	return ctrl.Result{}, nil
 }
 
-func newConfigMapForCr(instance *sampleoperatorv1.SampleOperator, data map[string]string) *corev1.ConfigMap {
+func (r *SampleOperatorReconciler) ensureLatestConfigMap(instance *sampleoperatorv1.SampleOperator, data map[string]string) (bool, error) {
+	configMap := r.newConfigMapForCr(instance, data)
+	// Set SampleOperator instance as the owner and controller
+	if err := controllerutil.SetControllerReference(instance, configMap, r.Scheme); err != nil {
+		return false, err
+	}
+	// Check if this ConfigMap already exists
+	foundMap := &corev1.ConfigMap{}
+	err := r.Client.Get(context.TODO(), types.NamespacedName{Name: configMap.Name, Namespace: configMap.Namespace}, foundMap)
+	if err != nil && errors.IsNotFound(err) {
+		err = r.Client.Create(context.TODO(), configMap)
+		if err != nil {
+			return false, err
+		}
+	} else if err != nil {
+		return false, err
+	}
+
+	if foundMap.Data["user"] != configMap.Data["user"] {
+		err = r.Client.Update(context.TODO(), configMap)
+		if err != nil {
+			return false, err
+		}
+		// ConfigMap created successfully - update status with the reference
+		instance.Status.SampleConfigMap = foundMap.Name
+		// Update status
+		err = r.Client.Status().Update(context.TODO(), instance)
+		if err != nil {
+			r.Log.Error(err, "Failed to update status with DBConfigMap")
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *SampleOperatorReconciler) newConfigMapForCr(instance *sampleoperatorv1.SampleOperator, data map[string]string) *corev1.ConfigMap {
 	labels := map[string]string{
 		"app": instance.Name,
 	}
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name,
+			Name:      instance.Name + "config",
 			Namespace: instance.Namespace,
 			Labels:    labels,
 		},
@@ -112,15 +157,39 @@ func newConfigMapForCr(instance *sampleoperatorv1.SampleOperator, data map[strin
 	return configMap
 }
 
+func (r *SampleOperatorReconciler) ensureLatestPod(instance *sampleoperatorv1.SampleOperator, data map[string]string) error {
+	// Define a new Pod object
+	pod := r.newPodForCR(instance, data)
+
+	// Set Presentation instance as the owner and controller
+	if err := controllerutil.SetControllerReference(instance, pod, r.Scheme); err != nil {
+		return err
+	}
+	// Check if this Pod already exists
+	found := &corev1.Pod{}
+	err := r.Client.Get(context.TODO(), types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, found)
+	if err != nil && errors.IsNotFound(err) {
+		err = r.Client.Create(context.TODO(), pod)
+		if err != nil {
+			return err
+		}
+		// Pod created successfully - don't requeue
+		return nil
+	} else if err != nil {
+
+		return err
+	}
+	return nil
+}
+
 // newPodForCR returns a busybox pod with the same name/namespace as the cr
 func (r *SampleOperatorReconciler) newPodForCR(instance *sampleoperatorv1.SampleOperator, data map[string]string) *corev1.Pod {
 	labels := map[string]string{
 		"app": instance.Name,
 	}
-	volumeName := instance.Name + "-config"
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name + "-pod",
+			Name:      instance.Spec.ServiceInstanceName + "-pod",
 			Namespace: instance.Namespace,
 			Labels:    labels,
 		},
@@ -139,67 +208,12 @@ func (r *SampleOperatorReconciler) newPodForCR(instance *sampleoperatorv1.Sample
 							Value: data[PasswordKey],
 						},
 					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      volumeName,
-							MountPath: "/config",
-						},
-					},
-				},
-			},
-			Volumes: []corev1.Volume{
-				{
-					Name: volumeName,
-					VolumeSource: corev1.VolumeSource{
-						ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: instance.Name + "-config",
-							},
-						},
-					},
 				},
 			},
 		},
 	}
 }
 
-func (r *SampleOperatorReconciler) ensureLatestPod(instance *sampleoperatorv1.SampleOperator, configMapChanged bool, data map[string]string) error {
-	// Define a new Pod object
-	pod := r.newPodForCR(instance, data)
-
-	// Set Presentation instance as the owner and controller
-	if err := controllerutil.SetControllerReference(instance, pod, r.Scheme); err != nil {
-		return err
-	}
-	// Check if this Pod already exists
-	found := &corev1.Pod{}
-	err := r.Client.Get(context.TODO(), types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, found)
-	if err != nil && errors.IsNotFound(err) {
-		err = r.Client.Create(context.TODO(), pod)
-		if err != nil {
-			return err
-		}
-
-		// Pod created successfully - don't requeue
-		return nil
-	} else if err != nil {
-
-		return err
-	}
-
-	if configMapChanged {
-		err = r.Client.Delete(context.TODO(), found)
-		if err != nil {
-			return err
-		}
-		err = r.Client.Create(context.TODO(), pod)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-
-}
 
 func (r *SampleOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).

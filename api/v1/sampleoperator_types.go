@@ -29,7 +29,6 @@ type SampleOperatorSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of SampleOperator. Edit SampleOperator_types.go to remove/update
-	Size                int    `json:"size"`
 	ServiceInstanceName string `json:"serviceInstanceName"`
 }
 
