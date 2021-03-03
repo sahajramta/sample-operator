@@ -189,7 +189,7 @@ func (r *SampleOperatorReconciler) newPodForCR(instance *sampleoperatorv1.Sample
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Spec.ServiceInstanceName + "-pod",
+			Name:      instance.Name + "-pod",
 			Namespace: instance.Namespace,
 			Labels:    labels,
 		},
